@@ -227,12 +227,18 @@ async fn main() -> Result<()> {
             }
         };
 
+        // JSON-RPC 2.0: messages without an `id` are notifications and
+        // MUST NOT receive a response. Claude Code (correctly) drops the
+        // connection if we reply to one.
+        let is_notification = request.id.is_none();
         let response = handle_request(&bridge, request).await;
-        let response_json = serde_json::to_string(&response)?;
+        if !is_notification {
+            let response_json = serde_json::to_string(&response)?;
 
-        tracing::debug!("Sending: {}", response_json);
-        writeln!(stdout, "{}", response_json)?;
-        stdout.flush()?;
+            tracing::debug!("Sending: {}", response_json);
+            writeln!(stdout, "{}", response_json)?;
+            stdout.flush()?;
+        }
     }
 
     Ok(())
@@ -243,7 +249,12 @@ async fn handle_request(bridge: &BridgeClient, request: JsonRpcRequest) -> JsonR
 
     match request.method.as_str() {
         "initialize" => JsonRpcResponse::success(id, server_info()),
-        "initialized" => JsonRpcResponse::success(id, json!({})),
+        // Claude Code sends `notifications/initialized`, not `initialized`.
+        // Accept both; the response is discarded anyway because it's a
+        // notification (no id).
+        "initialized" | "notifications/initialized" => {
+            JsonRpcResponse::success(id, json!({}))
+        }
         "tools/list" => JsonRpcResponse::success(id, tools_list()),
         "tools/call" => {
             let params = request.params.unwrap_or(json!({}));
